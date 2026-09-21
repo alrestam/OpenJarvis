@@ -1,18 +1,31 @@
 name: Docker Image CI
 
+# Only run when Dockerfile-related paths change. The repo has no Dockerfile
+# at rest, so an unconditional trigger reliably fails every commit; scoping
+# to paths keeps the workflow ready for when a Dockerfile is added without
+# leaving every unrelated push red.
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/docker-image.yml"
   pull_request:
     branches: [ "main" ]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/docker-image.yml"
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
-
+    # Extra guard: if the workflow runs (e.g. because its own file changed)
+    # but there is still no Dockerfile in the checkout, skip the build rather
+    # than fail. Once a Dockerfile lands, the step runs unconditionally.
+    if: ${{ hashFiles('Dockerfile') != '' }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - uses: actions/checkout@v4
+      - name: Build the Docker image
+        run: docker build . --file Dockerfile --tag openjarvis:${{ github.sha }}
