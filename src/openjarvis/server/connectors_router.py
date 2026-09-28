@@ -44,10 +44,13 @@ def _ensure_connectors_registered() -> None:
     """Ensure ConnectorRegistry is populated.
 
     If the registry has been cleared (e.g. by test fixtures) but connector
-    modules are already cached in sys.modules, reload each submodule to
-    re-execute their @ConnectorRegistry.register decorators.
+    modules are already cached in sys.modules, walk each cached submodule
+    and re-register any connector class it exposes via its ``connector_id``
+    class attribute. This avoids ``importlib.reload``, which would replace
+    every module-level function object and silently defeat any
+    ``unittest.mock.patch`` a test had installed against those functions.
     """
-    import importlib
+    import inspect
     import sys
 
     from openjarvis.core.registry import ConnectorRegistry
@@ -58,23 +61,40 @@ def _ensure_connectors_registered() -> None:
     except Exception:
         pass
 
-    # If the registry is still empty, reload individual connector submodules
-    # that are already present in sys.modules.
-    if not ConnectorRegistry.keys():
-        for mod_name in list(sys.modules):
-            if (
-                mod_name.startswith("openjarvis.connectors.")
-                and not mod_name.endswith("_stubs")
-                and not mod_name.endswith("pipeline")
-                and not mod_name.endswith("store")
-                and not mod_name.endswith("chunker")
-                and not mod_name.endswith("retriever")
-                and not mod_name.endswith("sync_engine")
-                and not mod_name.endswith("oauth")
-            ):
+    if ConnectorRegistry.keys():
+        return
+
+    # Registry is empty but connector modules may still be cached — rebuild
+    # the registry from live class references without reloading modules.
+    for mod_name in list(sys.modules):
+        if not mod_name.startswith("openjarvis.connectors."):
+            continue
+        if any(
+            mod_name.endswith(suffix)
+            for suffix in (
+                "_stubs",
+                "pipeline",
+                "store",
+                "chunker",
+                "retriever",
+                "sync_engine",
+                "oauth",
+            )
+        ):
+            continue
+        module = sys.modules.get(mod_name)
+        if module is None:
+            continue
+        for _name, obj in inspect.getmembers(module, inspect.isclass):
+            if obj.__module__ != mod_name:
+                continue
+            key = getattr(obj, "connector_id", None)
+            if not isinstance(key, str) or not key:
+                continue
+            if not ConnectorRegistry.contains(key):
                 try:
-                    importlib.reload(sys.modules[mod_name])
-                except Exception:
+                    ConnectorRegistry.register_value(key, obj)
+                except ValueError:
                     pass
 
 
